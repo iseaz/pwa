@@ -1,4 +1,6 @@
-let CACHE_STATIC_NAME = 'static-v13'
+importScripts('/src/js/idb.js')
+
+let CACHE_STATIC_NAME = 'static-v16'
 let CACHE_DYNAMIC_NAME = 'dynamic-v2'
 let STATIC_FILES = [
 	'/',
@@ -6,6 +8,7 @@ let STATIC_FILES = [
 	'/offline.html',
 	'/src/js/app.js',
 	'/src/js/feed.js',
+	'/src/js/idb.js',
 	'/src/js/promise.js',
 	'/src/js/fetch.js',
 	'/src/js/material.min.js',
@@ -17,18 +20,24 @@ let STATIC_FILES = [
 	'https://cdnjs.cloudflare.com/ajax/libs/material-design-lite/1.3.0/material.indigo-pink.min.css'
 ]
 
-function trimCache(cacheName, maxItems) {
-	caches.open(cacheName)
-		.then(cache => {
-			return cache.keys()
-				.then(keys => {
-					if (keys.length > maxItems) {
-						cache.delete(keys[0])
-							.then(trimCache(cacheName, maxItems))
-					}
-				})
-		})
-}
+let dbPromise = idb.open('posts-store', 1, db => {
+	if (!db.objectStoreNames.contains('posts')) {
+		db.createObjectStore('posts', { keyPath: 'id' })
+	}
+})
+
+// function trimCache(cacheName, maxItems) {
+// 	caches.open(cacheName)
+// 		.then(cache => {
+// 			return cache.keys()
+// 				.then(keys => {
+// 					if (keys.length > maxItems) {
+// 						cache.delete(keys[0])
+// 							.then(trimCache(cacheName, maxItems))
+// 					}
+// 				})
+// 		})
+// }
 
 self.addEventListener('install', event => {
 	console.log('[Service Worker] install', event)
@@ -123,19 +132,27 @@ function isInArray(str, arr){
 }
 
 self.addEventListener('fetch', event => {
-	let url = 'https://httpbin.org/get'
+	let url = 'https://pwagram-cf8ed.firebaseio.com/posts'
 
 	if (event.request.url.indexOf(url) > -1) {
 		event.respondWith(
-			caches.open(CACHE_DYNAMIC_NAME)
-				.then(cache => {
-					return fetch(event.request)
-						.then(res => {
-							trimCache(CACHE_DYNAMIC_NAME, 3)
-							cache.put(event.request, res.clone())
+			fetch(event.request)
+				.then(res => {
+					let clonedRes = res.clone()
+					clonedRes.json()
+						.then(data => {
+							for (let key in data) {
+								dbPromise.then(db => {
+									let tx = db.transaction('posts', 'readwrite')
+									let store = tx.objectStore('posts')
+									store.put(data[key])
 
-							return res
+									return tx.complete
+								})
+							}
 						})
+
+					return res
 				})
 		)
 	} else if (isInArray(event.request.url, STATIC_FILES)) {
@@ -153,8 +170,6 @@ self.addEventListener('fetch', event => {
 							.then(res => {
 								return caches.open(CACHE_DYNAMIC_NAME)
 									.then(cache => {
-										trimCache(CACHE_DYNAMIC_NAME, 3)
-
 										cache.put(event.request.url, res.clone())
 
 										return res
